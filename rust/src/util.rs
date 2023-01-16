@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Read;
 
 use skia_safe::{
-    Color, Data, EncodedImageFormat, Font, Image, Paint, Rect, scalar, Surface, TextBlob, Typeface,
+    scalar, Color, Data, EncodedImageFormat, Font, Image, Paint, Rect, Surface, TextBlob, Typeface,
 };
 use stream_deck_sdk::download::download_image;
 use stream_deck_sdk::images::image_to_base64;
@@ -75,13 +75,19 @@ pub fn init_canvas(
     (surface, text_paint, gotham)
 }
 
-pub fn surface_to_b64(mut surface: Surface) -> String {
-    let rendered = surface
-        .image_snapshot()
-        .encode_to_data(EncodedImageFormat::PNG)
-        .unwrap()
-        .to_vec();
-    image_to_base64(rendered)
+pub fn surface_to_b64(mut surface: Surface) -> Option<String> {
+    skia_image_to_b64(Some(surface.image_snapshot()))
+}
+
+pub fn skia_image_to_b64(image: Option<Image>) -> Option<String> {
+    if let Some(image) = image {
+        let rendered = image
+            .encode_to_data(EncodedImageFormat::PNG)
+            .unwrap()
+            .to_vec();
+        return image_to_base64(Some(rendered));
+    }
+    return None;
 }
 
 pub fn prepare_text(text: &str, typeface: &Typeface, size: f32) -> (TextBlob, (scalar, scalar)) {

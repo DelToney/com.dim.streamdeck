@@ -82,7 +82,7 @@ async fn render_action(
         .canvas()
         .draw_text_blob(label, Point::new(auto_margin(w), y), &paint);
 
-    Some(surface_to_b64(surface))
+    surface_to_b64(surface)
 }
 
 impl PostmasterAction {

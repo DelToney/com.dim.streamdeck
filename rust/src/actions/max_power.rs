@@ -78,7 +78,7 @@ fn render_action(power_type: PowerType, max_power: MaxPower) -> Option<String> {
         }
     }
 
-    Some(surface_to_b64(surface))
+    surface_to_b64(surface)
 }
 
 impl MaxPowerAction {

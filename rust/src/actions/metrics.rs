@@ -107,7 +107,7 @@ async fn render_action(metric: Metric, metrics: Metrics) -> Option<String> {
         .canvas()
         .draw_text_blob(label, Point::new(auto_margin(w), 120.0), &paint);
 
-    Some(surface_to_b64(surface))
+    surface_to_b64(surface)
 }
 
 impl MetricsAction {

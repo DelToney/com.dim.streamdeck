@@ -59,7 +59,7 @@ async fn render_action(settings: LoadoutSettings) -> Option<String> {
             &paint,
         );
 
-    return Some(surface_to_b64(surface));
+    return surface_to_b64(surface);
 }
 
 impl LoadoutAction {

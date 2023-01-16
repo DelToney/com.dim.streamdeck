@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use futures_util::future::join3;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use skia_safe::{Color, Point, Rect};
 use skia_safe::color_filters::matrix;
-use skia_safe::image_filters::blur;
+use skia_safe::image_filters::{blur, image};
+use skia_safe::{BlendMode, Color, Image, Point, Rect};
+use std::time::{Duration, Instant};
 use stream_deck_sdk::action::Action;
 use stream_deck_sdk::events::events::{
     AppearEvent, DidReceiveGlobalSettingsEvent, DidReceiveSettingsEvent, KeyEvent,
@@ -12,17 +13,21 @@ use stream_deck_sdk::events::events::{
 };
 use stream_deck_sdk::get_settings;
 use stream_deck_sdk::stream_deck::StreamDeck;
+use tokio::time::sleep;
 
 use crate::actions::search::SearchSettings;
+use crate::canvas::enhancement::{blur_image, scale_image};
 use crate::dim::events_sent::Selection;
 use crate::dim::with_action;
 use crate::json_string;
-use crate::shared::{EQUIPPED_MARK, EXOTIC, GRAYSCALE, has_equipped_items, LEGENDARY, SHARED};
+use crate::shared::{
+    has_equipped_items, EQUIPPED_MARK, EXOTIC, GRAYSCALE, LEGENDARY, SHARED, SYNC, SYNC_DONE,
+};
 use crate::util::{
-    bungify, bytes_to_skia_image, download_or_cache, prepare_render_empty, surface_to_b64,
+    bungify, bytes_to_skia_image, download_or_cache, prepare_render_empty, skia_image_to_b64,
 };
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PullItemSettings {
     pub(crate) item: Option<String>,
     pub(crate) label: Option<String>,
@@ -55,7 +60,7 @@ struct PartialPluginSettings {
 
 pub struct PullItemAction;
 
-async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> Option<String> {
+async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> Option<Image> {
     if settings.item.is_none() || settings.icon.is_none() {
         return None;
     }
@@ -78,7 +83,7 @@ async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> O
         _ => LEGENDARY.to_vec(),
     });
 
-    let size = 96.0;
+    let size = 144.0;
     let (mut surface, mut paint, _) = prepare_render_empty(size as i32);
 
     if !equipped && grayscale_enabled {
@@ -86,6 +91,9 @@ async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> O
     }
 
     let image = bytes_to_skia_image(image.unwrap());
+    let image = scale_image(image, size, size);
+
+    let shift = 5.0;
 
     surface
         .canvas()
@@ -93,16 +101,16 @@ async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> O
         .draw_image_rect(
             image,
             None,
-            Rect::new(3.0, 3.0, size - 3.0, size - 3.0),
+            Rect::new(shift, shift, size - shift, size - shift),
             &paint,
         );
 
     if overlay.is_some() {
-        let overlay = bytes_to_skia_image(overlay.unwrap());
+        let overlay = scale_image(bytes_to_skia_image(overlay.unwrap()), size, size);
         surface.canvas().draw_image_rect(
             overlay,
             None,
-            Rect::new(3.0, 3.0, size - 3.0, size - 3.0),
+            Rect::new(shift, shift, size - shift, size - shift),
             &paint,
         );
     }
@@ -120,7 +128,7 @@ async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> O
     surface.canvas().draw_image_rect(
         glass,
         None,
-        Rect::new(3.0, 3.0, size - 3.0, size - 3.0),
+        Rect::new(shift, shift, size - shift, size - shift),
         &paint,
     );
 
@@ -156,17 +164,92 @@ async fn render_action(settings: PullItemSettings, grayscale_enabled: bool) -> O
         );
     }
 
-    return Some(surface_to_b64(surface));
+    return Some(surface.image_snapshot());
+}
+
+pub fn loading_image(image: Image, degree: f32, done: bool) -> Option<Image> {
+    let size = image.width() as f32;
+    let (mut surface, mut paint, _) = prepare_render_empty(size as i32);
+    let loading = blur_image(image, 6.0);
+
+    surface
+        .canvas()
+        .draw_image_rect(loading, None, Rect::new(0.0, 0.0, size, size), &paint);
+
+    paint
+        .set_color(Color::from_argb(120, 0, 0, 0))
+        .set_blend_mode(BlendMode::Multiply);
+
+    surface
+        .canvas()
+        .draw_rect(Rect::new(0.0, 0.0, size, size), &paint);
+
+    paint
+        .set_color(Color::from_argb(255, 255, 255, 255))
+        .set_blend_mode(BlendMode::SrcOver);
+
+    let overlay = bytes_to_skia_image(if done {
+        SYNC_DONE.to_vec()
+    } else {
+        SYNC.to_vec()
+    });
+
+    if done {
+        surface
+            .canvas()
+            .draw_image_rect(overlay, None, Rect::new(0.0, 0.0, size, size), &paint);
+    } else {
+        surface
+            .canvas()
+            .rotate(degree, Some(Point::new(size / 2.0, size / 2.0)))
+            .draw_image_rect(overlay, None, Rect::new(0.0, 0.0, size, size), &paint);
+    }
+
+    return Some(surface.image_snapshot());
 }
 
 impl PullItemAction {
-    async fn update(&self, context: String, settings: PullItemSettings, sd: StreamDeck) {
+    async fn update(
+        &self,
+        context: String,
+        settings: PullItemSettings,
+        loading: bool,
+        sd: StreamDeck,
+    ) {
         let global_settings = sd.global_settings().await.unwrap_or(PartialPluginSettings {
             grayscale: Some(true),
         });
+
+        if loading {
+            let image = render_action(settings.clone(), false).await;
+            let mut rotation = 0.0;
+            let starting = Instant::now();
+            loop {
+                sd.set_image_b64(
+                    context.clone(),
+                    skia_image_to_b64(loading_image(image.clone().unwrap(), rotation, false)),
+                )
+                .await;
+                sleep(Duration::from_millis(33)).await;
+                if starting.elapsed().as_secs() > 2 {
+                    break;
+                }
+                rotation = (rotation + 10.0) % 360.0;
+            }
+
+            sd.set_image_b64(
+                context.clone(),
+                skia_image_to_b64(loading_image(image.clone().unwrap(), 0.0, true)),
+            )
+            .await;
+
+            sleep(Duration::from_millis(2000)).await;
+        }
+
         let grayscale_enabled = global_settings.grayscale.unwrap_or(true);
-        let image = render_action(settings, grayscale_enabled).await;
-        sd.set_image_b64(context, image).await;
+        let image = render_action(settings.clone(), grayscale_enabled).await;
+        sd.set_image_b64(context.clone(), skia_image_to_b64(image))
+            .await;
     }
 
     async fn pull_item(
@@ -204,18 +287,21 @@ impl Action for PullItemAction {
     async fn on_appear(&self, e: AppearEvent, sd: StreamDeck) {
         let settings: Option<PullItemSettings> = get_settings(e.payload.settings);
         if let Some(settings) = settings {
-            self.update(e.context, settings, sd).await;
+            self.update(e.context, settings, false, sd).await;
         }
     }
 
     async fn on_key_up(&self, e: KeyEvent, sd: StreamDeck) {
         let settings: Option<PullItemSettings> = get_settings(e.payload.settings);
         if let Some(settings) = settings {
-            if e.is_double_tap && settings.alt_action_trigger == Some("double".to_owned()) {
-                self.pull_item(e.context, settings, sd, true).await;
-            } else {
-                self.pull_item(e.context, settings, sd, false).await;
-            }
+            self.pull_item(
+                e.context.clone(),
+                settings.clone(),
+                sd.clone(),
+                e.is_double_tap && settings.alt_action_trigger == Some("double".to_owned()),
+            )
+            .await;
+            self.update(e.context, settings, true, sd).await;
         }
     }
 
@@ -231,7 +317,7 @@ impl Action for PullItemAction {
     async fn on_settings_changed(&self, e: DidReceiveSettingsEvent, sd: StreamDeck) {
         let settings: Option<PullItemSettings> = get_settings(e.payload.settings);
         if let Some(settings) = settings {
-            self.update(e.context, settings, sd).await
+            self.update(e.context, settings, false, sd).await
         }
     }
 
@@ -239,7 +325,7 @@ impl Action for PullItemAction {
         let instances = sd.contexts_of(self.uuid()).await;
         for ctx in instances {
             let settings: Option<PullItemSettings> = sd.settings(ctx.clone()).await;
-            self.update(ctx.clone(), settings.unwrap(), sd.clone())
+            self.update(ctx.clone(), settings.unwrap(), false, sd.clone())
                 .await
         }
     }

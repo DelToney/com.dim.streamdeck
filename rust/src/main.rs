@@ -21,6 +21,7 @@ use crate::actions::solo_mode::SoloModeAction;
 use crate::actions::vault::VaultAction;
 
 mod actions;
+mod canvas;
 mod dim;
 mod global_settings;
 mod server;

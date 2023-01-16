@@ -26,6 +26,8 @@ lazy_static! {
     );
     pub static ref SHADOW: Vec<u8> = get_file_as_byte_vec("./images/shadow.png");
     pub static ref EXOTIC: Vec<u8> = get_file_as_byte_vec("./images/item/exotic.png");
+    pub static ref SYNC: Vec<u8> = get_file_as_byte_vec("./images/item/sync.png");
+    pub static ref SYNC_DONE: Vec<u8> = get_file_as_byte_vec("./images/item/done.png");
     pub static ref EQUIPPED_MARK: Vec<u8> = get_file_as_byte_vec("./images/item/equipped-mark.png");
     pub static ref LEGENDARY: Vec<u8> = get_file_as_byte_vec("./images/item/legendary.png");
     pub static ref SOLO_MODE_OFF: Vec<u8> = get_file_as_byte_vec("./images/solo-mode/off.png");

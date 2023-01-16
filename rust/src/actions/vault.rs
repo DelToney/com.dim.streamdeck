@@ -36,7 +36,7 @@ struct PartialPluginSettings {
     pub(crate) vault: Option<Vault>,
 }
 
-fn render_action(item: ItemType, counter: String) -> String {
+fn render_action(item: ItemType, counter: String) -> Option<String> {
     let file_image = match item {
         ItemType::BrightDust => "./images/vault/dust.png".to_string(),
         _ => format!("./images/vault/{:?}.png", item).to_string(),
@@ -74,7 +74,7 @@ impl VaultAction {
                 return;
             }
             let image = render_action(item, counter.unwrap().separated_string());
-            sd.set_image_b64(context, Some(image)).await;
+            sd.set_image_b64(context, image).await;
         }
     }
 }

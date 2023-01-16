@@ -43,7 +43,7 @@ impl SoloModeAction {
                 } else {
                     SOLO_MODE_OFF.to_vec()
                 };
-                sd.set_image_b64(context, Some(image_to_base64(image)))
+                sd.set_image_b64(context, image_to_base64(Some(image)))
                     .await
             }
             _ => sd.show_alert(context).await,
